@@ -229,7 +229,7 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
   // specific to x16 panels, make generic
   int yoff = y / RHEIGHT;
   
-  x = x + yoff * WIDTH; // move over 32
+  x = x + yoff * WIDTH; // move over 1 width, and put pixel there
   y = y % RHEIGHT;
   
   // Adafruit_GFX uses 16-bit color in 5/6/5 format, while matrix needs
@@ -248,7 +248,7 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
     ptr = &matrixbuff[backindex][y * RWIDTH * (nPlanes - 1) + x]; // Base addr
     // Plane 0 is a tricky case -- its data is spread about,
     // stored in least two bits not used by the other planes.
-    ptr[WIDTH*2] &= ~B00000011;           // Plane 0 R,G mask out in one op
+    ptr[RWIDTH*2] &= ~B00000011;           // Plane 0 R,G mask out in one op
     if(r & 1) ptr[RWIDTH*2] |=  B00000001; // Plane 0 R: 64 bytes ahead, bit 0
     if(g & 1) ptr[RWIDTH*2] |=  B00000010; // Plane 0 G: 64 bytes ahead, bit 1
     if(b & 1) ptr[RWIDTH]   |=  B00000001; // Plane 0 B: 32 bytes ahead, bit 0
@@ -325,7 +325,7 @@ void RGBmatrixPanel::dumpMatrix(void) {
 
   int i, buffsize = WIDTH * nRows * 3;
 
-  Serial.print(F("\n\n"
+  Serial3.print(F("\n\n"
     "#include <avr/pgmspace.h>\n\n"
     "static const uint8_t PROGMEM img[] = {\n  "));
 
@@ -457,7 +457,7 @@ void RGBmatrixPanel::updateDisplay(void) {
       //SCLKPORT = tick; // Clock lo
       digitalWriteFast(CLK, HIGH);
 #if   F_CPU == 96000000
-      asm volatile("nop"); // we need a very short delay to let the clock line actually change before we turn it LOW again,  48Mhz and below doesn't need this.
+     asm volatile("nop"); // we need a very short delay to let the clock line actually change before we turn it LOW again,  48Mhz and below doesn't need this.
 #elif F_CPU == 72000000
 #error "This can't work at 72MHz, there's something even wronger about the timing, go up to 96MHz"
 #endif
