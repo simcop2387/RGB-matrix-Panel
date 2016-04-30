@@ -113,7 +113,7 @@ void RGBmatrixPanel::begin(void) {
   DATADIR = B11111111;
   DATAPORT = 0;
 
-  drawTimer.begin(drawInterrupt, 150 * (panel_x * panel_y)); // Scale the interrupt time by the number of panels
+  drawTimer.begin(drawInterrupt, 150);
 
   sei();                // Enable global interrupts
 }
@@ -346,7 +346,6 @@ void RGBmatrixPanel::dumpMatrix(void) {
 void drawInterrupt()
 {
   activePanel->updateDisplay();
-  //drawTimer.end();
 }
 
 // Two constants are used in timing each successive BCM interval.
@@ -361,8 +360,8 @@ void drawInterrupt()
 // issuing loop (not actually a 'loop' because it's unrolled, but eh).
 // Both numbers are rounded up slightly to allow a little wiggle room
 // should different compilers produce slightly different results.
-#define CALLOVERHEAD 60   // Actual value measured = 56
-#define LOOPTIME     400  // Actual value measured = 188
+#define CALLOVERHEAD 5   // Actual value measured = 56
+#define LOOPTIME     30  // Actual value measured = 188
 // The "on" time for bitplane 0 (with the shortest BCM interval) can
 // then be estimated as LOOPTIME + CALLOVERHEAD * 2.  Each successive
 // bitplane then doubles the prior amount of time.  We can then
@@ -396,10 +395,22 @@ void drawInterrupt()
 
 void RGBmatrixPanel::updateDisplay(void) {
   uint8_t  i, *ptr;
+  drawTimer.end();
 
   digitalWriteFast(OE, HIGH); // Disable LED output during row/plane switchover
   digitalWriteFast(LAT, HIGH); // Latch data loaded during *prior* interrupt
 
+  uint16_t t, duration;
+  
+  // Calculate time to next interrupt BEFORE incrementing plane #.
+  // This is because duration is the display time for the data loaded
+  // on the PRIOR interrupt.  CALLOVERHEAD is subtracted from the
+  // result because that time is implicit between the timer overflow
+  // (interrupt triggered) and the initial LEDs-off line at the start
+  // of this method.
+  t = (nRows > 8) ? LOOPTIME : (LOOPTIME * 2);
+  duration = ((t + CALLOVERHEAD * 2) << plane) - CALLOVERHEAD;
+  
   // Borrowing a technique here from Ray's Logic:
   // www.rayslogic.com/propeller/Programming/AdafruitRGB/AdafruitRGB.htm
   // This code cycles through all four planes for each scanline before
@@ -500,4 +511,5 @@ void RGBmatrixPanel::updateDisplay(void) {
     }
   }
   //delayMicroseconds(plane);
+  drawTimer.begin(drawInterrupt, duration); // Scale the interrupt time by the number of panels
 }
