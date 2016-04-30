@@ -36,8 +36,8 @@ BSD license, all text above must be included in any redistribution.
 #include "RGBmatrixPanel.h"
 #include "gamma.h"
 
-#ifndef _swap_int16_t
-#define _swap_int16_t(a, b) { int16_t t = a; a = b; b = t; }
+#ifndef _swap
+#define _swap(a, b) { auto t = a; a = b; b = t; }
 #endif
 
 // A full PORT register is required for the data lines, though only the
@@ -46,44 +46,10 @@ BSD license, all text above must be included in any redistribution.
 // For similar reasons, the clock pin is only semi-configurable...it can
 // be specified as any pin within a specific PORT register stated below.
 
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
- // Arduino Mega is now tested and confirmed, with the following caveats:
- // Because digital pins 2-7 don't map to a contiguous port register,
- // the Mega requires connecting the matrix data lines to different pins.
- // Digital pins 24-29 are used for the data interface, and 22 & 23 are
- // unavailable for other outputs because the software needs to write to
- // the full PORTA register for speed.  Clock may be any pin on PORTB --
- // on the Mega, this CAN'T be pins 8 or 9 (these are on PORTH), thus the
- // wiring will need to be slightly different than the tutorial's
- // explanation on the Uno, etc.  Pins 10-13 are all fair game for the
- // clock, as are pins 50-53.
- #define DATAPORT PORTA
- #define DATADIR  DDRA
- #define SCLKPORT PORTB
-#elif defined(__AVR_ATmega32U4__)
- // Arduino Leonardo: this is vestigial code an unlikely to ever be
- // finished -- DO NOT USE!!!  Unlike the Uno, digital pins 2-7 do NOT
- // map to a contiguous port register, dashing our hopes for compatible
- // wiring.  Making this work would require significant changes both to
- // the bit-shifting code in the library, and how this board is wired to
- // the LED matrix.  Bummer.
- #define DATAPORT PORTD
- #define DATADIR  DDRD
- #define SCLKPORT PORTB
-#elif defined(CORE_TEENSY)
+void drawInterrupt();
 
- void drawInterrupt();
-
- #define DATAPORT PORTD
- #define DATADIR  DDRD
-
-#else
- // Ports for "standard" boards (Arduino Uno, Duemilanove, etc.)
- #define DATAPORT PORTD
- #define DATADIR  DDRD
- #define SCLKPORT PORTB
-#endif
-
+#define DATAPORT PORTD
+#define DATADIR  DDRD
 #define nPlanes 4
 
 // The fact that the display driver interrupt stuff is tied to the
@@ -96,101 +62,36 @@ BSD license, all text above must be included in any redistribution.
 // are even an actual need.
 static RGBmatrixPanel *activePanel = NULL;
 
-#ifdef CORE_TEENSY
 // Code common to both the 16x32 and 32x32 constructors:
-void RGBmatrixPanel::init(uint8_t rows, boolean dbuf, uint8_t width) {
+void RGBmatrixPanel::init(uint8_t rows, boolean dbuf) {
+  nRows = rows; // Number of multiplexed rows; actual height is 2X this
 
-	nRows = rows; // Number of multiplexed rows; actual height is 2X this
+  // Allocate and initialize matrix buffer:
+  uint32_t buffsize = RWIDTH * RHEIGHT * 3, // we'll pack things efficiently
+  allocsize = (dbuf == true) ? (buffsize * 2) : buffsize;
+  if (NULL == (matrixbuff[0] = (uint8_t *)malloc(allocsize))) return;
+  memset(matrixbuff[0], 0, allocsize);
+  // If not double-buffered, both buffers then point to the same address:
+  matrixbuff[1] = (dbuf == true) ? &matrixbuff[0][buffsize] : matrixbuff[0];
 
-	// Allocate and initialize matrix buffer:
-	int buffsize = width * nRows * 3, // x3 = 3 bytes holds 4 planes "packed"
-		allocsize = (dbuf == true) ? (buffsize * 2) : buffsize;
-	if (NULL == (matrixbuff[0] = (uint8_t *)malloc(allocsize))) return;
-	memset(matrixbuff[0], 0, allocsize);
-	// If not double-buffered, both buffers then point to the same address:
-	matrixbuff[1] = (dbuf == true) ? &matrixbuff[0][buffsize] : matrixbuff[0];
-
-	plane = nPlanes - 1;
-	row = nRows - 1;
-	swapflag = false;
-	backindex = 0;     // Array index of back buffer
+  plane = nPlanes - 1;
+  row = nRows - 1;
+  swapflag = false;
+  backindex = 0;     // Array index of back buffer
 }
 
 // Constructor for 32x32 or 32x64 panel:
-RGBmatrixPanel::RGBmatrixPanel(boolean dbuf, uint8_t width) :
-	Adafruit_GFX(width, 32) {
+RGBmatrixPanel::RGBmatrixPanel(boolean dbuf, uint8_t width, uint8_t height, uint8_t _panel_x, uint8_t _panel_y, uint8_t nRows) :
+  Adafruit_GFX(width, height) {
+    panel_x = _panel_x;
+    panel_y = _panel_y;
+    
+    // Copy these
+    RWIDTH=WIDTH/panel_x * panel_y;
+    RHEIGHT=HEIGHT/panel_y;
 
-	init(16, dbuf, width);
+  init(nRows, dbuf);
 }
-#else
-
-// Code common to both the 16x32 and 32x32 constructors:
-void RGBmatrixPanel::init(uint8_t rows, uint8_t a, uint8_t b, uint8_t c,
-	uint8_t sclk, uint8_t latch, uint8_t oe, boolean dbuf, uint8_t width) {
-
-	nRows = rows; // Number of multiplexed rows; actual height is 2X this
-
-	// Allocate and initialize matrix buffer:
-	int buffsize = width * nRows * 3, // x3 = 3 bytes holds 4 planes "packed"
-		allocsize = (dbuf == true) ? (buffsize * 2) : buffsize;
-	if (NULL == (matrixbuff[0] = (uint8_t *)malloc(allocsize))) return;
-	memset(matrixbuff[0], 0, allocsize);
-	// If not double-buffered, both buffers then point to the same address:
-	matrixbuff[1] = (dbuf == true) ? &matrixbuff[0][buffsize] : matrixbuff[0];
-
-	// Save pin numbers for use by begin() method later.
-	_a = a;
-	_b = b;
-	_c = c;
-	_sclk = sclk;
-	_latch = latch;
-	_oe = oe;
-
-	// Look up port registers and pin masks ahead of time,
-	// avoids many slow digitalWrite() calls later.
-
-	sclkpin = digitalPinToBitMask(sclk);
-	latport = portOutputRegister(digitalPinToPort(latch));
-	latpin = digitalPinToBitMask(latch);
-	oeport = portOutputRegister(digitalPinToPort(oe));
-	oepin = digitalPinToBitMask(oe);
-	addraport = portOutputRegister(digitalPinToPort(a));
-	addrapin = digitalPinToBitMask(a);
-	addrbport = portOutputRegister(digitalPinToPort(b));
-	addrbpin = digitalPinToBitMask(b);
-	addrcport = portOutputRegister(digitalPinToPort(c));
-	addrcpin = digitalPinToBitMask(c);
-
-	plane = nPlanes - 1;
-	row = nRows - 1;
-	swapflag = false;
-	backindex = 0;     // Array index of back buffer
-}
-
-// Constructor for 16x32 panel:
-RGBmatrixPanel::RGBmatrixPanel(
-  uint8_t a, uint8_t b, uint8_t c,
-  uint8_t sclk, uint8_t latch, uint8_t oe, boolean dbuf) :
-  Adafruit_GFX(32, 16) {
-
-  init(8, a, b, c, sclk, latch, oe, dbuf, 32);
-}
-
-// Constructor for 32x32 or 32x64 panel:
-RGBmatrixPanel::RGBmatrixPanel(
-  uint8_t a, uint8_t b, uint8_t c, uint8_t d,
-  uint8_t sclk, uint8_t latch, uint8_t oe, boolean dbuf, uint8_t width) :
-  Adafruit_GFX(width, 32) {
-
-  init(16, a, b, c, sclk, latch, oe, dbuf, width);
-
-  // Init a few extra 32x32-specific elements:
-  _d        = d;
-
-  addrdport = portOutputRegister(digitalPinToPort(d));
-  addrdpin  = digitalPinToBitMask(d);
-}
-#endif
 
 void RGBmatrixPanel::begin(void) {
 
@@ -199,7 +100,6 @@ void RGBmatrixPanel::begin(void) {
   activePanel = this;                      // For interrupt hander
 
   // Enable all comm & address pins as outputs, set default states:
-#ifdef CORE_TEENSY
   pinMode(CLK, OUTPUT); digitalWriteFast(CLK, LOW);
   pinMode(LAT, OUTPUT); digitalWriteFast(LAT, LOW);
   pinMode(OE, OUTPUT); digitalWriteFast(OE, HIGH);
@@ -207,36 +107,14 @@ void RGBmatrixPanel::begin(void) {
   pinMode(B, OUTPUT); digitalWriteFast(B, LOW);
   pinMode(C, OUTPUT); digitalWriteFast(C, LOW);
   if (nRows > 8) {
-	  pinMode(D, OUTPUT); digitalWriteFast(D, LOW);
+    pinMode(D, OUTPUT); digitalWriteFast(D, LOW);
   }
 
-  DATADIR = B11111100;
+  DATADIR = B11111111;
   DATAPORT = 0;
 
-  drawTimer.begin(drawInterrupt, 150);
+  drawTimer.begin(drawInterrupt, 150 * (panel_x * panel_y)); // Scale the interrupt time by the number of panels
 
-#else
-  pinMode(_sclk , OUTPUT); SCLKPORT   &= ~sclkpin;  // Low
-  pinMode(_latch, OUTPUT); *latport   &= ~latpin;   // Low
-  pinMode(_oe   , OUTPUT); *oeport    |= oepin;     // High (disable output)
-  pinMode(_a    , OUTPUT); *addraport &= ~addrapin; // Low
-  pinMode(_b    , OUTPUT); *addrbport &= ~addrbpin; // Low
-  pinMode(_c    , OUTPUT); *addrcport &= ~addrcpin; // Low
-  if(nRows > 8) {
-    pinMode(_d  , OUTPUT); *addrdport &= ~addrdpin; // Low
-  }
-
-  // The high six bits of the data port are set as outputs;
-  // Might make this configurable in the future, but not yet.
-  DATADIR  = B11111100;
-  DATAPORT = 0;
-
-  // Set up Timer1 for interrupt:
-  TCCR1A  = _BV(WGM11); // Mode 14 (fast PWM), OC1A off
-  TCCR1B  = _BV(WGM13) | _BV(WGM12) | _BV(CS10); // Mode 14, no prescale
-  ICR1    = 100;
-  TIMSK1 |= _BV(TOIE1); // Enable Timer1 interrupt
-#endif
   sei();                // Enable global interrupts
 }
 
@@ -335,7 +213,7 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
 
   switch(rotation) {
    case 1:
-    _swap_int16_t(x, y);
+    _swap(x, y);
     x = WIDTH  - 1 - x;
     break;
    case 2:
@@ -343,11 +221,17 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
     y = HEIGHT - 1 - y;
     break;
    case 3:
-    _swap_int16_t(x, y);
+    _swap(x, y);
     y = HEIGHT - 1 - y;
     break;
   }
 
+  // specific to x16 panels, make generic
+  int yoff = y / RHEIGHT;
+  
+  x = x + yoff * WIDTH; // move over 32
+  y = y % RHEIGHT;
+  
   // Adafruit_GFX uses 16-bit color in 5/6/5 format, while matrix needs
   // 4/4/4.  Pluck out relevant bits while separating into R,G,B:
   r =  c >> 12;        // RRRRrggggggbbbbb
@@ -361,14 +245,14 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
   if(y < nRows) {
     // Data for the upper half of the display is stored in the lower
     // bits of each byte.
-    ptr = &matrixbuff[backindex][y * WIDTH * (nPlanes - 1) + x]; // Base addr
+    ptr = &matrixbuff[backindex][y * RWIDTH * (nPlanes - 1) + x]; // Base addr
     // Plane 0 is a tricky case -- its data is spread about,
     // stored in least two bits not used by the other planes.
     ptr[WIDTH*2] &= ~B00000011;           // Plane 0 R,G mask out in one op
-    if(r & 1) ptr[WIDTH*2] |=  B00000001; // Plane 0 R: 64 bytes ahead, bit 0
-    if(g & 1) ptr[WIDTH*2] |=  B00000010; // Plane 0 G: 64 bytes ahead, bit 1
-    if(b & 1) ptr[WIDTH]   |=  B00000001; // Plane 0 B: 32 bytes ahead, bit 0
-    else      ptr[WIDTH]   &= ~B00000001; // Plane 0 B unset; mask out
+    if(r & 1) ptr[RWIDTH*2] |=  B00000001; // Plane 0 R: 64 bytes ahead, bit 0
+    if(g & 1) ptr[RWIDTH*2] |=  B00000010; // Plane 0 G: 64 bytes ahead, bit 1
+    if(b & 1) ptr[RWIDTH]   |=  B00000001; // Plane 0 B: 32 bytes ahead, bit 0
+    else      ptr[RWIDTH]   &= ~B00000001; // Plane 0 B unset; mask out
     // The remaining three image planes are more normal-ish.
     // Data is stored in the high 6 bits so it can be quickly
     // copied to the DATAPORT register w/6 output lines.
@@ -377,15 +261,15 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
       if(r & bit) *ptr |= B00000100; // Plane N R: bit 2
       if(g & bit) *ptr |= B00001000; // Plane N G: bit 3
       if(b & bit) *ptr |= B00010000; // Plane N B: bit 4
-      ptr  += WIDTH;                 // Advance to next bit plane
+      ptr  += RWIDTH;                 // Advance to next bit plane
     }
   } else {
     // Data for the lower half of the display is stored in the upper
     // bits, except for the plane 0 stuff, using 2 least bits.
-    ptr = &matrixbuff[backindex][(y - nRows) * WIDTH * (nPlanes - 1) + x];
+    ptr = &matrixbuff[backindex][(y - nRows) * RWIDTH * (nPlanes - 1) + x];
     *ptr &= ~B00000011;                  // Plane 0 G,B mask out in one op
-    if(r & 1)  ptr[WIDTH] |=  B00000010; // Plane 0 R: 32 bytes ahead, bit 1
-    else       ptr[WIDTH] &= ~B00000010; // Plane 0 R unset; mask out
+    if(r & 1)  ptr[RWIDTH] |=  B00000010; // Plane 0 R: 32 bytes ahead, bit 1
+    else       ptr[RWIDTH] &= ~B00000010; // Plane 0 R unset; mask out
     if(g & 1) *ptr        |=  B00000001; // Plane 0 G: bit 0
     if(b & 1) *ptr        |=  B00000010; // Plane 0 B: bit 0
     for(; bit < limit; bit <<= 1) {
@@ -393,7 +277,7 @@ void RGBmatrixPanel::drawPixel(int16_t x, int16_t y, uint16_t c) {
       if(r & bit) *ptr |= B00100000; // Plane N R: bit 5
       if(g & bit) *ptr |= B01000000; // Plane N G: bit 6
       if(b & bit) *ptr |= B10000000; // Plane N B: bit 7
-      ptr  += WIDTH;                 // Advance to next bit plane
+      ptr  += RWIDTH;                 // Advance to next bit plane
     }
   }
 }
@@ -403,7 +287,7 @@ void RGBmatrixPanel::fillScreen(uint16_t c) {
     // For black or white, all bits in frame buffer will be identically
     // set or unset (regardless of weird bit packing), so it's OK to just
     // quickly memset the whole thing:
-    memset(matrixbuff[backindex], c, WIDTH * nRows * 3);
+    memset(matrixbuff[backindex], c, RWIDTH * nRows * 3);
   } else {
     // Otherwise, need to handle it the long way:
     Adafruit_GFX::fillScreen(c);
@@ -459,18 +343,11 @@ void RGBmatrixPanel::dumpMatrix(void) {
 
 // -------------------- Interrupt handler stuff --------------------
 
-#ifdef CORE_TEENSY
 void drawInterrupt()
 {
-	activePanel->updateDisplay();
-	//drawTimer.end();
+  activePanel->updateDisplay();
+  //drawTimer.end();
 }
-#else
-ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
-  activePanel->updateDisplay();   // Call refresh func for active display
-  TIFR1 |= TOV1;                  // Clear Timer1 interrupt flag
-}
-#endif
 
 // Two constants are used in timing each successive BCM interval.
 // These were found empirically, by checking the value of TCNT1 at
@@ -485,7 +362,7 @@ ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
 // Both numbers are rounded up slightly to allow a little wiggle room
 // should different compilers produce slightly different results.
 #define CALLOVERHEAD 60   // Actual value measured = 56
-#define LOOPTIME     200  // Actual value measured = 188
+#define LOOPTIME     400  // Actual value measured = 188
 // The "on" time for bitplane 0 (with the shortest BCM interval) can
 // then be estimated as LOOPTIME + CALLOVERHEAD * 2.  Each successive
 // bitplane then doubles the prior amount of time.  We can then
@@ -517,123 +394,11 @@ ISR(TIMER1_OVF_vect, ISR_BLOCK) { // ISR_BLOCK important -- see notes later
 // counter variables change between past/present/future tense in mid-
 // function...hopefully tenses are sufficiently commented.
 
-#ifdef CORE_TEENSY
 void RGBmatrixPanel::updateDisplay(void) {
-	uint8_t  i, *ptr;
+  uint8_t  i, *ptr;
 
-	digitalWriteFast(OE, HIGH); // Disable LED output during row/plane switchover
-	digitalWriteFast(LAT, HIGH); // Latch data loaded during *prior* interrupt
-
-	// Borrowing a technique here from Ray's Logic:
-	// www.rayslogic.com/propeller/Programming/AdafruitRGB/AdafruitRGB.htm
-	// This code cycles through all four planes for each scanline before
-	// advancing to the next line.  While it might seem beneficial to
-	// advance lines every time and interleave the planes to reduce
-	// vertical scanning artifacts, in practice with this panel it causes
-	// a green 'ghosting' effect on black pixels, a much worse artifact.
-
-	if (++plane >= nPlanes) {      // Advance plane counter.  Maxed out?
-		plane = 0;                  // Yes, reset to plane 0, and
-		if (++row >= nRows) {        // advance row counter.  Maxed out?
-			row = 0;              // Yes, reset row counter, then...
-			if (swapflag == true) {    // Swap front/back buffers if requested
-				backindex = 1 - backindex;
-				swapflag = false;
-			}
-			buffptr = matrixbuff[1 - backindex]; // Reset into front buffer
-		}
-	}
-	else if (plane == 1) {
-		// Plane 0 was loaded on prior interrupt invocation and is about to
-		// latch now, so update the row address lines before we do that:
-		if (row & 0x1)  digitalWriteFast(A, HIGH);
-		else            digitalWriteFast(A, LOW);
-		if (row & 0x2)  digitalWriteFast(B, HIGH);
-		else            digitalWriteFast(B, LOW);
-		if (row & 0x4)  digitalWriteFast(C, HIGH);
-		else            digitalWriteFast(C, LOW);
-		if (nRows > 8) {
-			if (row & 0x8) digitalWriteFast(D, HIGH);
-			else           digitalWriteFast(D, LOW);
-		}
-	}
-
-	// buffptr, being 'volatile' type, doesn't take well to optimization.
-	// A local register copy can speed some things up:
-	ptr = (uint8_t *)buffptr;
-
-	//drawTimer.begin(drawInterrupt, 10000);
-	digitalWriteFast(OE, LOW); // Re-enable output
-	digitalWriteFast(LAT, LOW); // Latch down
-
-	// Record current state of SCLKPORT register, as well as a second
-	// copy with the clock bit set.  This makes the innnermost data-
-	// pushing loops faster, as they can just set the PORT state and
-	// not have to load/modify/store bits every single time.  It's a
-	// somewhat rude trick that ONLY works because the interrupt
-	// handler is set ISR_BLOCK, halting any other interrupts that
-	// might otherwise also be twiddling the port at the same time
-	// (else this would clobber them).
-
-	if (plane > 0) { // 188 ticks from TCNT1=0 (above) to end of function
-
-		// Planes 1-3 copy bytes directly from RAM to PORT without unpacking.
-		// The least 2 bits (used for plane 0 data) are presumed masked out
-		// by the port direction bits.
-
-		for (i = 0; i < WIDTH; i++)
-		{
-			DATAPORT = ptr[i];
-			//SCLKPORT = tick; // Clock lo
-			digitalWriteFast(CLK, HIGH);
-			//SCLKPORT = tock; // Clock hip
-			digitalWriteFast(CLK, LOW);
-		}
-		ptr = &(ptr[WIDTH]);
-
-		buffptr = ptr; //+= 32;
-
-	}
-	else { // 920 ticks from TCNT1=0 (above) to end of function
-
-		// Planes 1-3 (handled above) formatted their data "in place,"
-		// their layout matching that out the output PORT register (where
-		// 6 bits correspond to output data lines), maximizing throughput
-		// as no conversion or unpacking is needed.  Plane 0 then takes up
-		// the slack, with all its data packed into the 2 least bits not
-		// used by the other planes.  This works because the unpacking and
-		// output for plane 0 is handled while plane 3 is being displayed...
-		// because binary coded modulation is used (not PWM), that plane
-		// has the longest display interval, so the extra work fits.
-		for (i = 0; i<WIDTH; i++) {
-			DATAPORT =
-				(ptr[i] << 6) |
-				((ptr[i + WIDTH] << 4) & 0x30) |
-				((ptr[i + WIDTH * 2] << 2) & 0x0C);
-
-			//SCLKPORT = tick; // Clock lo
-			digitalWriteFast(CLK, HIGH);
-			//SCLKPORT = tock; // Clock hip
-			digitalWriteFast(CLK, LOW);
-		}
-	}
-}
-#else
-void RGBmatrixPanel::updateDisplay(void) {
-  uint8_t  i, tick, tock, *ptr;
-  uint16_t t, duration;
-
-  *oeport  |= oepin;  // Disable LED output during row/plane switchover
-  *latport |= latpin; // Latch data loaded during *prior* interrupt
-
-  // Calculate time to next interrupt BEFORE incrementing plane #.
-  // This is because duration is the display time for the data loaded
-  // on the PRIOR interrupt.  CALLOVERHEAD is subtracted from the
-  // result because that time is implicit between the timer overflow
-  // (interrupt triggered) and the initial LEDs-off line at the start
-  // of this method.
-  t = (nRows > 8) ? LOOPTIME : (LOOPTIME * 2);
-  duration = ((t + CALLOVERHEAD * 2) << plane) - CALLOVERHEAD;
+  digitalWriteFast(OE, HIGH); // Disable LED output during row/plane switchover
+  digitalWriteFast(LAT, HIGH); // Latch data loaded during *prior* interrupt
 
   // Borrowing a technique here from Ray's Logic:
   // www.rayslogic.com/propeller/Programming/AdafruitRGB/AdafruitRGB.htm
@@ -642,40 +407,34 @@ void RGBmatrixPanel::updateDisplay(void) {
   // advance lines every time and interleave the planes to reduce
   // vertical scanning artifacts, in practice with this panel it causes
   // a green 'ghosting' effect on black pixels, a much worse artifact.
-
-  if(++plane >= nPlanes) {      // Advance plane counter.  Maxed out?
+  
+  if (++plane >= nPlanes) {      // Advance plane counter.  Maxed out?
     plane = 0;                  // Yes, reset to plane 0, and
-    if(++row >= nRows) {        // advance row counter.  Maxed out?
-      row     = 0;              // Yes, reset row counter, then...
-      if(swapflag == true) {    // Swap front/back buffers if requested
+    if (++row >= nRows) {        // advance row counter.  Maxed out?
+      row = 0;              // Yes, reset row counter, then...
+      if (swapflag == true) {    // Swap front/back buffers if requested
         backindex = 1 - backindex;
-        swapflag  = false;
+        swapflag = false;
       }
-      buffptr = matrixbuff[1-backindex]; // Reset into front buffer
-    }
-  } else if(plane == 1) {
-    // Plane 0 was loaded on prior interrupt invocation and is about to
-    // latch now, so update the row address lines before we do that:
-    if(row & 0x1)   *addraport |=  addrapin;
-    else            *addraport &= ~addrapin;
-    if(row & 0x2)   *addrbport |=  addrbpin;
-    else            *addrbport &= ~addrbpin;
-    if(row & 0x4)   *addrcport |=  addrcpin;
-    else            *addrcport &= ~addrcpin;
-    if(nRows > 8) {
-      if(row & 0x8) *addrdport |=  addrdpin;
-      else          *addrdport &= ~addrdpin;
+      buffptr = matrixbuff[1 - backindex]; // Reset into front buffer
     }
   }
+  else if (plane == 1) {
+    digitalWriteFast(A, row & 0x1 ? HIGH : LOW);
+    digitalWriteFast(B, row & 0x2 ? HIGH : LOW);
+    digitalWriteFast(C, row & 0x4 ? HIGH : LOW);
+    if (nRows >= 8)
+      digitalWriteFast(D, row & 0x8 ? HIGH : LOW);
+  }
 
+  
   // buffptr, being 'volatile' type, doesn't take well to optimization.
   // A local register copy can speed some things up:
   ptr = (uint8_t *)buffptr;
 
-  ICR1      = duration; // Set interval for next interrupt
-  TCNT1     = 0;        // Restart interrupt timer
-  *oeport  &= ~oepin;   // Re-enable output
-  *latport &= ~latpin;  // Latch down
+  //drawTimer.begin(drawInterrupt, 10000);
+  digitalWriteFast(OE, LOW); // Re-enable output
+  digitalWriteFast(LAT, LOW); // Latch down
 
   // Record current state of SCLKPORT register, as well as a second
   // copy with the clock bit set.  This makes the innnermost data-
@@ -685,45 +444,33 @@ void RGBmatrixPanel::updateDisplay(void) {
   // handler is set ISR_BLOCK, halting any other interrupts that
   // might otherwise also be twiddling the port at the same time
   // (else this would clobber them).
-  tock = SCLKPORT;
-  tick = tock | sclkpin;
 
-  if(plane > 0) { // 188 ticks from TCNT1=0 (above) to end of function
+  if (plane > 0) { // 188 ticks from TCNT1=0 (above) to end of function
 
     // Planes 1-3 copy bytes directly from RAM to PORT without unpacking.
     // The least 2 bits (used for plane 0 data) are presumed masked out
     // by the port direction bits.
 
-    // A tiny bit of inline assembly is used; compiler doesn't pick
-    // up on opportunity for post-increment addressing mode.
-    // 5 instruction ticks per 'pew' = 160 ticks total
-    #define pew asm volatile(                 \
-      "ld  __tmp_reg__, %a[ptr]+"    "\n\t"   \
-      "out %[data]    , __tmp_reg__" "\n\t"   \
-      "out %[clk]     , %[tick]"     "\n\t"   \
-      "out %[clk]     , %[tock]"     "\n"     \
-      :: [ptr]  "e" (ptr),                    \
-         [data] "I" (_SFR_IO_ADDR(DATAPORT)), \
-         [clk]  "I" (_SFR_IO_ADDR(SCLKPORT)), \
-         [tick] "r" (tick),                   \
-         [tock] "r" (tock));
+    for (i = 0; i < RWIDTH; i++)
+    {
+      DATAPORT = ptr[i]>>2;
+      //SCLKPORT = tick; // Clock lo
+      digitalWriteFast(CLK, HIGH);
+#if   F_CPU == 96000000
+      asm volatile("nop"); // we need a very short delay to let the clock line actually change before we turn it LOW again,  48Mhz and below doesn't need this.
+#elif F_CPU == 72000000
+#error "This can't work at 72MHz, there's something even wronger about the timing, go up to 96MHz"
+#endif
 
-    // Loop is unrolled for speed:
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
+      //SCLKPORT = tock; // Clock hip
+      digitalWriteFast(CLK, LOW);
+    }
+    ptr = &(ptr[RWIDTH]);
 
-      if (WIDTH == 64) {
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
-    pew pew pew pew pew pew pew pew
-      }
+    buffptr = ptr; //+= 32;
 
-	buffptr = ptr; //+= 32;
-
-  } else { // 920 ticks from TCNT1=0 (above) to end of function
+  }
+  else { // 920 ticks from TCNT1=0 (above) to end of function
 
     // Planes 1-3 (handled above) formatted their data "in place,"
     // their layout matching that out the output PORT register (where
@@ -734,14 +481,23 @@ void RGBmatrixPanel::updateDisplay(void) {
     // output for plane 0 is handled while plane 3 is being displayed...
     // because binary coded modulation is used (not PWM), that plane
     // has the longest display interval, so the extra work fits.
-    for(i=0; i<WIDTH; i++) {
+    for (i = 0; i<RWIDTH; i++) {
       DATAPORT =
-        ( ptr[i]    << 6)         |
-        ((ptr[i+WIDTH] << 4) & 0x30) |
-        ((ptr[i+WIDTH*2] << 2) & 0x0C);
-      SCLKPORT = tick; // Clock lo
-      SCLKPORT = tock; // Clock hi
-    } 
-  }
-}
+        ((ptr[i] << 6) |
+         ((ptr[i + RWIDTH] << 4) & 0x30) |
+         ((ptr[i + RWIDTH * 2] << 2) & 0x0C)) >> 2;
+
+      //SCLKPORT = tick; // Clock lo
+      digitalWriteFast(CLK, HIGH);
+      //delayMicroseconds(1);
+#if   F_CPU == 96000000
+      asm volatile("nop"); // we need a very short delay to let the clock line actually change before we turn it LOW again,  48Mhz and below doesn't need this.
+#elif F_CPU == 72000000
+#error "This can't work at 72MHz, there's something even wronger about the timing, go up to 96MHz"
 #endif
+      //SCLKPORT = tock; // Clock hip
+      digitalWriteFast(CLK, LOW);
+    }
+  }
+  //delayMicroseconds(plane);
+}

@@ -12,16 +12,10 @@
 // Similar to F(), but for PROGMEM string pointers rather than literals
 #define F2(progmem_ptr) (const __FlashStringHelper *)progmem_ptr
 
-#define CLK 8  // MUST be on PORTB! (Use pin 11 on Mega)
-#define LAT A3
-#define OE  9
-#define A   A0
-#define B   A1
-#define C   A2
 // Last parameter = 'true' enables double-buffering, for flicker-free,
 // buttery smooth animation.  Note that NOTHING WILL SHOW ON THE DISPLAY
 // until the first call to swapBuffers().  This is normal.
-RGBmatrixPanel matrix(A, B, C, CLK, LAT, OE, true);
+RGBmatrixPanel matrix(true);
 // Double-buffered mode consumes nearly all the RAM available on the
 // Arduino Uno -- only a handful of free bytes remain.  Even the
 // following string needs to go in PROGMEM:
